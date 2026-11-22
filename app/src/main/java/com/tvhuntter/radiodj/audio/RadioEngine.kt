@@ -605,7 +605,9 @@ object RadioEngine : MusicDeck.Listener, CallManager.Events {
         if (broadcaster != null) return true
         startEngine()
         lateinit var b: Broadcaster
-        b = Broadcaster(c, onStatus = { s ->
+        b = Broadcaster(c, onBitrateChanged = { kbps ->
+            main.post { saveConfig(_config.value.copy(bitrateKbps = kbps)) }
+        }, onStatus = { s ->
             if (broadcaster === b) {
                 _live.value = s
                 if (s.state == LiveState.ERROR) {

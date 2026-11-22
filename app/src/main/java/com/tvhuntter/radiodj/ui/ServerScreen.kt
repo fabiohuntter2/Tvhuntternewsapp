@@ -136,7 +136,7 @@ fun ServerScreen() {
                 }
             }
             Text(
-                "128 kbps é o padrão das rádios. Em internet móvel fraca, use 64 ou 96. Não passe do limite do seu plano de streaming.",
+                "Use a mesma qualidade do seu plano de streaming (veja no painel). Se passar do limite, o servidor derruba a conexão — o app reduz sozinho. 128 kbps é o padrão; em internet móvel fraca, use 64 ou 96.",
                 fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }

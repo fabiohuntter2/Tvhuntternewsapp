@@ -307,4 +307,45 @@ class CoreTest {
         server.close()
         handshakeTimeoutMs = 6000
     }
+
+    /** Servidor com limite de 128 kbps: derruba quem manda mais. O app deve baixar a qualidade sozinho. */
+    @Test
+    fun reducesBitrateWhenServerDropsRightAfterConnect() {
+        val server = ServerSocket(0)
+        val accepted = java.util.concurrent.atomic.AtomicBoolean(false)
+        thread {
+            while (!server.isClosed) {
+                val s = try { server.accept() } catch (_: Exception) { break }
+                thread {
+                    s.use {
+                        val inp = s.getInputStream()
+                        while (inp.read() != '\n'.code) {}
+                        s.getOutputStream().write("OK2\r\nicy-caps:11\r\n\r\n".toByteArray())
+                        val sb = StringBuilder()
+                        while (!sb.endsWith("\r\n\r\n")) sb.append(inp.read().toChar())
+                        val br = Regex("icy-br:(\\d+)").find(sb)!!.groupValues[1].toInt()
+                        if (br > 128) { Thread.sleep(200); return@thread }
+                        accepted.set(true)
+                        val buf = ByteArray(4096)
+                        while (inp.read(buf) >= 0) {}
+                    }
+                }
+            }
+        }
+        val cfg = StreamConfig(ServerType.SHOUTCAST, "127.0.0.1", server.localPort, password = "p", bitrateKbps = 192)
+        var changed = 0
+        val msgs = mutableListOf<String>()
+        val b = Broadcaster(cfg, { msgs += it.message }, reconnectDelayMs = 100, onBitrateChanged = { changed = it })
+        b.start()
+        val deadline = System.currentTimeMillis() + 20_000
+        var k = 0
+        while (!accepted.get() && System.currentTimeMillis() < deadline) {
+            b.submit(sine(1152, start = k++ * 1152)); Thread.sleep(10)
+        }
+        b.stop(); server.close()
+        msgs.filter { it.contains("derrubou") }.distinct().forEach(::println)
+        assertTrue(accepted.get(), "deveria conectar com qualidade menor")
+        assertEquals(128, changed)
+        assertEquals(128, b.bitrateKbps)
+    }
 }

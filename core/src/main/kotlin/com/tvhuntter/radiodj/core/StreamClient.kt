@@ -66,6 +66,11 @@ fun describeError(e: Exception): String = when (e) {
     is ConnectException -> "porta fechada / conexão recusada"
     is SocketTimeoutException -> "servidor não respondeu (tempo esgotado)"
     is AuthException -> "senha recusada" + (e.message?.let { " — $it" } ?: "")
+    is java.net.SocketException -> when {
+        e.message?.contains("pipe", true) == true || e.message?.contains("reset", true) == true ->
+            "o servidor encerrou a conexão"
+        else -> e.message ?: "falha de rede"
+    }
     else -> e.message ?: e.javaClass.simpleName
 }
 

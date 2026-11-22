@@ -24,7 +24,13 @@ class Broadcaster(
     private val onStatus: (LiveStatus) -> Unit,
     private val clientFactory: (StreamConfig, (String) -> Unit) -> StreamClient = { c, log -> StreamClient.create(c, log) },
     private val reconnectDelayMs: Long = 3000,
+    /** Avisado quando a qualidade é reduzida automaticamente. */
+    private val onBitrateChanged: (Int) -> Unit = {},
 ) {
+    /** Qualidade atual (pode ser reduzida se o servidor derrubar a conexão por limite do plano). */
+    @Volatile var bitrateKbps: Int = config.bitrateKbps
+        private set
+    private var earlyDrops = 0
     // ~5 s de áudio em blocos de 1152 quadros
     private val queue = ArrayBlockingQueue<ShortArray>(200)
     @Volatile private var running = false
@@ -81,7 +87,9 @@ class Broadcaster(
         var reconnects = 0
         var first = true
         while (running) {
-            val client = clientFactory(config) { line ->
+            val cfg = config.copy(bitrateKbps = bitrateKbps)
+            var liveAt = 0L
+            val client = clientFactory(cfg) { line ->
                 publish(status.copy(message = line))
             }
             try {
@@ -92,11 +100,12 @@ class Broadcaster(
                 ))
                 client.connect()
                 connectedPort = client.connectedPort
-                val encoder = Mp3Encoder(bitrateKbps = config.bitrateKbps)
+                val encoder = Mp3Encoder(bitrateKbps = bitrateKbps)
                 queue.clear()
                 connected = true
                 first = false
                 val since = System.currentTimeMillis()
+                liveAt = since
                 var sent = status.bytesSent
                 publish(LiveStatus(LiveState.LIVE, "NO AR • ${client.description}", sent, since, reconnects))
                 lastTitle?.let { sendTitleAsync(it) }
@@ -124,7 +133,22 @@ class Broadcaster(
                 connected = false
                 if (!running) break
                 reconnects++
-                val reason = describeError(e).replaceFirstChar { it.uppercase() }
+                var reason = describeError(e).replaceFirstChar { it.uppercase() }
+                // derrubado logo depois de conectar: quase sempre é limite de qualidade do plano
+                if (liveAt > 0 && System.currentTimeMillis() - liveAt < 10_000) {
+                    earlyDrops++
+                    val lower = BITRATES.filter { it < bitrateKbps }.maxOrNull()
+                    if (earlyDrops >= 2 && lower != null) {
+                        earlyDrops = 0
+                        bitrateKbps = lower
+                        onBitrateChanged(lower)
+                        reason = "O servidor derrubou a conexão logo após conectar (limite de qualidade do plano?). Qualidade reduzida para $lower kbps"
+                    } else {
+                        reason = "O servidor derrubou a conexão logo após conectar"
+                    }
+                } else if (liveAt > 0) {
+                    earlyDrops = 0
+                }
                 publish(status.copy(
                     state = LiveState.RECONNECTING,
                     message = "$reason - nova tentativa em ${reconnectDelayMs / 1000}s",
@@ -144,5 +168,9 @@ class Broadcaster(
         if (status.state != LiveState.ERROR) {
             publish(LiveStatus(LiveState.OFF, "Desconectado", status.bytesSent))
         }
+    }
+
+    companion object {
+        val BITRATES = listOf(32, 48, 64, 96, 128, 192)
     }
 }
