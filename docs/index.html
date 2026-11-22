@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ligue para a rádio</title>
+<meta name="description" content="Ligue ao vivo para o estúdio e participe da programação.">
+<meta name="theme-color" content="#060c20">
+<link rel="icon" href="icon.png">
+<meta property="og:title" content="Ligue para a rádio ao vivo">
+<meta property="og:description" content="Toque, diga seu nome e fale com o estúdio.">
+<meta property="og:image" content="logo.png">
+<style>
+  :root {
+    --bg: #060c20; --card: #111a33; --line: #22305a; --text: #eef2fb; --muted: #9fb0d4;
+    --blue: #1e88e5; --red: #e53935; --green: #2e7d32; --amber: #ffb300;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { min-height: 100vh; background:
+    radial-gradient(1200px 500px at 50% -10%, rgba(30,136,229,.35), transparent 60%),
+    radial-gradient(600px 300px at 100% 100%, rgba(229,57,53,.18), transparent 60%), var(--bg); }
+  main { max-width: 440px; margin: 0 auto; padding: 20px 16px 40px; }
+  .logo { display: block; width: 78%; max-width: 300px; margin: 4px auto 8px; filter: drop-shadow(0 8px 24px rgba(30,136,229,.35)); }
+  h1 { text-align: center; font-size: 22px; margin: 6px 0 2px; letter-spacing: .3px; }
+  .sub { text-align: center; color: var(--muted); margin: 0 0 18px; font-size: 15px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 6px; }
+  input { width: 100%; padding: 14px; font-size: 17px; border-radius: 12px; border: 1px solid var(--line);
+    background: #0b1328; color: var(--text); outline: none; }
+  input:focus { border-color: var(--blue); }
+  button { width: 100%; border: 0; border-radius: 14px; padding: 16px; font-size: 18px; font-weight: 800;
+    color: #fff; cursor: pointer; letter-spacing: .3px; }
+  button:disabled { opacity: .5; }
+  .call { background: linear-gradient(180deg, #34a853, #1e7e34); margin-top: 18px; box-shadow: 0 8px 24px rgba(52,168,83,.35); }
+  .hang { background: linear-gradient(180deg, #ef5350, #c62828); margin-top: 12px; }
+  .ghost { background: #1b2647; margin-top: 10px; font-size: 16px; }
+  .status { text-align: center; padding: 8px 0 4px; }
+  .ring { width: 120px; height: 120px; margin: 6px auto 14px; border-radius: 50%; display: grid; place-items: center;
+    background: #16244a; border: 3px solid #2c4a8f; font-size: 50px; position: relative; }
+  .ring.pulse::after { content: ""; position: absolute; inset: -10px; border-radius: 50%; border: 3px solid var(--blue);
+    animation: pulse 1.4s ease-out infinite; }
+  .ring.onair { background: var(--red); border-color: #ff8a80; }
+  .ring.onair::after { border-color: var(--red); }
+  @keyframes pulse { from { transform: scale(.9); opacity: 1; } to { transform: scale(1.3); opacity: 0; } }
+  .state { font-size: 22px; font-weight: 800; margin: 0; }
+  .detail { color: var(--muted); margin: 6px 0 0; font-size: 15px; }
+  .badge { display: inline-block; background: var(--red); color: #fff; font-weight: 900; padding: 6px 14px;
+    border-radius: 99px; letter-spacing: 1px; margin-bottom: 10px; animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: .55; } }
+  .timer { font-variant-numeric: tabular-nums; color: var(--muted); margin-top: 6px; }
+  .meter { height: 8px; background: #0b1328; border-radius: 6px; overflow: hidden; margin: 16px 0 2px; }
+  .meter > div { height: 100%; width: 0; background: linear-gradient(90deg, #43a047, #fdd835, #e53935); transition: width .08s; }
+  .tips { color: var(--muted); font-size: 13.5px; line-height: 1.5; margin-top: 16px; }
+  .tips li { margin: 4px 0; }
+  .hidden { display: none !important; }
+  .err { color: #ff8a80; text-align: center; margin-top: 12px; font-weight: 600; }
+  footer { text-align: center; color: #5f6f96; font-size: 12px; margin-top: 22px; }
+</style>
+</head>
+<body>
+<main>
+  <img class="logo" src="logo.png" alt="Logo da rádio">
+  <h1 id="title">Ligue para a rádio</h1>
+  <p class="sub">Fale ao vivo com o estúdio. É grátis — usa só a sua internet.</p>
+
+  <!-- Formulário -->
+  <section id="formCard" class="card">
+    <label for="name">Seu nome</label>
+    <input id="name" maxlength="40" autocomplete="name" placeholder="Ex.: Maria">
+    <label for="city">Cidade / bairro (opcional)</label>
+    <input id="city" maxlength="40" placeholder="Ex.: Centro">
+    <button id="btnCall" class="call">📞 Ligar para a rádio</button>
+    <p id="formErr" class="err hidden"></p>
+    <ul class="tips">
+      <li>Use <b>fone de ouvido</b> se tiver — o som fica bem melhor.</li>
+      <li><b>Desligue o rádio</b> perto de você enquanto fala, para não dar eco.</li>
+      <li>Quando pedir, <b>permita o microfone</b>.</li>
+    </ul>
+  </section>
+
+  <!-- Chamada -->
+  <section id="callCard" class="card hidden">
+    <div class="status">
+      <div id="onairBadge" class="badge hidden">● VOCÊ ESTÁ NO AR</div>
+      <div id="ring" class="ring pulse">📞</div>
+      <p id="state" class="state">Conectando…</p>
+      <p id="detail" class="detail"></p>
+      <div id="timer" class="timer hidden">00:00</div>
+    </div>
+    <div class="meter" title="Seu microfone"><div id="meter"></div></div>
+    <button id="btnMute" class="ghost hidden">🎙️ Silenciar meu microfone</button>
+    <button id="btnHang" class="hang">Desligar</button>
+  </section>
+
+  <section id="endCard" class="card hidden">
+    <div class="status">
+      <div class="ring">📻</div>
+      <p id="endState" class="state">Ligação encerrada</p>
+      <p id="endDetail" class="detail">Obrigado por participar!</p>
+    </div>
+    <button id="btnAgain" class="call">Ligar novamente</button>
+  </section>
+
+  <audio id="remote" autoplay playsinline></audio>
+  <footer>Chamada de voz pela internet • criptografada</footer>
+</main>
+
+<script src="peerjs.min.js"></script>
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var radioCode = (q.get('r') || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  var radioName = q.get('n') || 'a rádio';
+  var srv = null;
+  try { srv = q.get('srv') ? JSON.parse(q.get('srv')) : null; } catch (e) {}
+
+  var $ = function (id) { return document.getElementById(id); };
+  $('title').textContent = 'Ligue para ' + radioName;
+  document.title = 'Ligue para ' + radioName;
+  try {
+    $('name').value = localStorage.getItem('ouvinte_nome') || '';
+    $('city').value = localStorage.getItem('ouvinte_cidade') || '';
+  } catch (e) {}
+
+  if (!radioCode) {
+    $('formErr').textContent = 'Link incompleto. Peça o link correto para a rádio.';
+    $('formErr').classList.remove('hidden');
+    $('btnCall').disabled = true;
+  }
+
+  var peer = null, call = null, conn = null, localStream = null;
+  var ringTimeout = null, timerInt = null, startedAt = 0, ended = false, answered = false;
+  var audioCtx = null, analyser = null, meterRaf = null, muted = false;
+
+  function show(id) {
+    ['formCard', 'callCard', 'endCard'].forEach(function (c) { $(c).classList.toggle('hidden', c !== id); });
+  }
+  function setState(text, detail, mode) {
+    $('state').textContent = text;
+    $('detail').textContent = detail || '';
+    var ring = $('ring');
+    ring.classList.toggle('pulse', mode === 'ringing' || mode === 'onair');
+    ring.classList.toggle('onair', mode === 'onair');
+    ring.textContent = mode === 'onair' ? '🎙️' : (mode === 'talk' ? '🗣️' : (mode === 'wait' ? '⏳' : '📞'));
+    $('onairBadge').classList.toggle('hidden', mode !== 'onair');
+  }
+  function startTimer() {
+    if (timerInt) return;
+    startedAt = Date.now();
+    $('timer').classList.remove('hidden');
+    timerInt = setInterval(function () {
+      var s = Math.floor((Date.now() - startedAt) / 1000);
+      $('timer').textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+    }, 500);
+  }
+
+  function startMeter(stream) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      var src = audioCtx.createMediaStreamSource(stream);
+      analyser = audioCtx.createAnalyser(); analyser.fftSize = 512;
+      src.connect(analyser);
+      var buf = new Float32Array(analyser.fftSize);
+      (function loop() {
+        analyser.getFloatTimeDomainData(buf);
+        var peak = 0; for (var i = 0; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i]));
+        $('meter').style.width = (muted ? 0 : Math.min(100, peak * 160)) + '%';
+        meterRaf = requestAnimationFrame(loop);
+      })();
+    } catch (e) {}
+  }
+
+  function finish(title, detail) {
+    if (ended) return;
+    ended = true;
+    clearTimeout(ringTimeout); clearInterval(timerInt); timerInt = null;
+    if (meterRaf) cancelAnimationFrame(meterRaf);
+    try { if (call) call.close(); } catch (e) {}
+    try { if (conn) conn.close(); } catch (e) {}
+    try { if (peer) peer.destroy(); } catch (e) {}
+    if (localStream) localStream.getTracks().forEach(function (t) { t.stop(); });
+    try { if (audioCtx) audioCtx.close(); } catch (e) {}
+    $('remote').srcObject = null;
+    $('endState').textContent = title || 'Ligação encerrada';
+    $('endDetail').textContent = detail || 'Obrigado por participar!';
+    show('endCard');
+  }
+
+  function onHostState(s) {
+    if (ended) return;
+    if (s === 'ringing') setState('Chamando o estúdio…', 'Aguarde, o locutor vai atender.', 'ringing');
+    else if (s === 'waiting') setState('Você está na fila', 'O locutor está em outra ligação. Não desligue!', 'wait');
+    else if (s === 'private') { answered = true; clearTimeout(ringTimeout); startTimer(); setState('Falando com o estúdio', 'Você ainda NÃO está no ar. Aguarde o locutor.', 'talk'); }
+    else if (s === 'onair') { answered = true; clearTimeout(ringTimeout); startTimer(); setState('VOCÊ ESTÁ NO AR!', 'Fale normalmente. Todos estão ouvindo você.', 'onair'); }
+    else if (s === 'ended') finish('Ligação encerrada', 'O estúdio encerrou a ligação. Obrigado por participar!');
+  }
+
+  function startCall() {
+    var name = $('name').value.trim();
+    var city = $('city').value.trim();
+    if (!name) { $('formErr').textContent = 'Digite o seu nome.'; $('formErr').classList.remove('hidden'); $('name').focus(); return; }
+    try { localStorage.setItem('ouvinte_nome', name); localStorage.setItem('ouvinte_cidade', city); } catch (e) {}
+    $('formErr').classList.add('hidden');
+    ended = false; answered = false;
+    show('callCard');
+    $('timer').classList.add('hidden');
+    setState('Ligando o microfone…', 'Permita o uso do microfone.', 'ringing');
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      finish('Navegador não suportado', 'Abra este link no Chrome ou no Safari atualizado.');
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+      video: false
+    }).then(function (stream) {
+      localStream = stream;
+      startMeter(stream);
+      $('btnMute').classList.remove('hidden');
+      setState('Conectando…', '', 'ringing');
+      var cfg = { debug: 1 };
+      if (srv) { cfg.host = srv.host; cfg.port = srv.port; cfg.path = srv.path || '/'; cfg.secure = !!srv.secure; }
+      peer = new Peer(cfg);
+      peer.on('open', function () {
+        var hostId = 'tvhuntter-dj-' + radioCode;
+        var md = { name: name, city: city };
+        conn = peer.connect(hostId, { metadata: md, reliable: true });
+        conn.on('data', function (d) { if (d && d.state) onHostState(d.state); });
+        call = peer.call(hostId, stream, { metadata: md });
+        if (!call) { finish('Não foi possível ligar', 'Tente novamente em instantes.'); return; }
+        setState('Chamando o estúdio…', 'Aguarde, o locutor vai atender.', 'ringing');
+        call.on('stream', function (remote) {
+          var el = $('remote');
+          el.srcObject = remote;
+          var p = el.play(); if (p && p.catch) p.catch(function () {});
+          if (!answered) onHostState('private');
+        });
+        call.on('close', function () {
+          if (answered) finish('Ligação encerrada', 'Obrigado por participar!');
+          else setTimeout(function () { finish('A linha está fechada', 'O estúdio não está recebendo ligações agora. Tente mais tarde.'); }, 400);
+        });
+        call.on('error', function () { finish('A ligação caiu', 'Verifique sua internet e tente de novo.'); });
+        ringTimeout = setTimeout(function () {
+          if (!answered) finish('Ninguém atendeu', 'O estúdio não atendeu agora. Tente de novo daqui a pouco.');
+        }, 120000);
+      });
+      peer.on('error', function (err) {
+        var t = err && err.type;
+        if (t === 'peer-unavailable') finish('A linha está fechada', 'O estúdio não está recebendo ligações agora. Tente mais tarde.');
+        else if (t === 'network' || t === 'server-error' || t === 'socket-error') finish('Sem conexão', 'Verifique sua internet e tente de novo.');
+        else if (!answered) finish('Não foi possível ligar', (err && err.message) || 'Tente novamente.');
+      });
+      peer.on('disconnected', function () { if (!ended && peer && !peer.destroyed) { try { peer.reconnect(); } catch (e) {} } });
+    }).catch(function () {
+      finish('Microfone bloqueado', 'Permita o microfone nas configurações do navegador e tente de novo.');
+    });
+  }
+
+  $('btnCall').addEventListener('click', startCall);
+  $('btnAgain').addEventListener('click', function () { show('formCard'); });
+  $('btnHang').addEventListener('click', function () {
+    try { if (conn && conn.open) conn.send({ state: 'hangup' }); } catch (e) {}
+    setTimeout(function () { finish('Ligação encerrada', 'Obrigado por participar!'); }, 150);
+  });
+  $('btnMute').addEventListener('click', function () {
+    muted = !muted;
+    if (localStream) localStream.getAudioTracks().forEach(function (t) { t.enabled = !muted; });
+    this.textContent = muted ? '🔇 Microfone silenciado — toque para falar' : '🎙️ Silenciar meu microfone';
+  });
+  window.addEventListener('beforeunload', function () { try { if (call) call.close(); if (peer) peer.destroy(); } catch (e) {} });
+})();
+</script>
+</body>
+</html>

@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -91,16 +92,24 @@ fun AppScreen(onExit: () -> Unit) {
                 )
                 NavigationBarItem(
                     selected = tab == 2, onClick = { tab = 2 },
+                    icon = { Icon(Icons.Filled.SupportAgent, null) }, label = { Text("Ouvintes") },
+                )
+                NavigationBarItem(
+                    selected = tab == 3, onClick = { tab = 3 },
                     icon = { Icon(Icons.Filled.Settings, null) }, label = { Text("Servidor") },
                 )
             }
         },
     ) { inner ->
-        Box(Modifier.fillMaxSize().padding(inner)) {
-            when (tab) {
-                0 -> StudioScreen(onOpenServer = { tab = 2 }, onOpenPlaylist = { tab = 1 })
-                1 -> PlaylistScreen()
-                else -> ServerScreen()
+        Column(Modifier.fillMaxSize().padding(inner)) {
+            if (tab != 0) IncomingCallBanner(onOpen = { tab = 0 })
+            Box(Modifier.fillMaxSize()) {
+                when (tab) {
+                    0 -> StudioScreen(onOpenServer = { tab = 3 }, onOpenPlaylist = { tab = 1 })
+                    1 -> PlaylistScreen()
+                    2 -> ListenersScreen()
+                    else -> ServerScreen()
+                }
             }
         }
     }

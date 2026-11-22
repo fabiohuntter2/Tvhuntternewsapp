@@ -1,6 +1,11 @@
 package com.tvhuntter.radiodj.audio
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.media.RingtoneManager
 import android.media.AudioAttributes
 import android.media.AudioTrack
 import android.media.MediaMetadataRetriever
@@ -10,7 +15,13 @@ import android.os.Looper
 import android.os.Process
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.documentfile.provider.DocumentFile
+import com.tvhuntter.radiodj.R
+import com.tvhuntter.radiodj.call.CallManager
+import com.tvhuntter.radiodj.call.CallUiState
+import com.tvhuntter.radiodj.call.Caller
+import com.tvhuntter.radiodj.ui.MainActivity
 import com.tvhuntter.radiodj.core.AudioFormat
 import com.tvhuntter.radiodj.core.Broadcaster
 import com.tvhuntter.radiodj.core.DuckingMixer
@@ -47,6 +58,7 @@ data class PlayerState(
 data class Levels(
     val music: Float = 0f,
     val mic: Float = 0f,
+    val caller: Float = 0f,
     val outL: Float = 0f,
     val outR: Float = 0f,
     val duck: Float = 1f,
@@ -55,7 +67,7 @@ data class Levels(
 /**
  * Coração do app: playlist + microfone -> mixer com ducking -> (retorno no fone) + (MP3 para o servidor).
  */
-object RadioEngine : MusicDeck.Listener {
+object RadioEngine : MusicDeck.Listener, CallManager.Events {
     private const val TAG = "RadioEngine"
 
     private lateinit var app: Context
@@ -67,6 +79,8 @@ object RadioEngine : MusicDeck.Listener {
     private val micRing = PcmRingBuffer(AudioFormat.SAMPLE_RATE * AudioFormat.CHANNELS / 2)
     private lateinit var deck: MusicDeck
     private val mic = MicInput(micRing)
+    private val callerRing = PcmRingBuffer(AudioFormat.SAMPLE_RATE) // 0,5 s
+    private lateinit var calls: CallManager
     private val main = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -82,6 +96,11 @@ object RadioEngine : MusicDeck.Listener {
     val mix: StateFlow<MixSettings> = _mix.asStateFlow()
     private val _config = MutableStateFlow(StreamConfig())
     val config: StateFlow<StreamConfig> = _config.asStateFlow()
+    val callState: StateFlow<CallUiState> get() = calls.state
+    private val _acceptCalls = MutableStateFlow(true)
+    val acceptCalls: StateFlow<Boolean> = _acceptCalls.asStateFlow()
+    private val _callCode = MutableStateFlow("")
+    val callCode: StateFlow<String> = _callCode.asStateFlow()
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
@@ -99,6 +118,10 @@ object RadioEngine : MusicDeck.Listener {
         app = context.applicationContext
         prefs = Prefs(app)
         deck = MusicDeck(app, musicRing, this)
+        calls = CallManager(app, callerRing, this)
+        _acceptCalls.value = prefs.acceptCalls
+        _callCode.value = prefs.callCode()
+        createCallChannel()
         _config.value = prefs.loadConfig()
         setMix(prefs.loadMix(), save = false)
         _player.value = PlayerState(playlist = prefs.loadPlaylist())
@@ -114,10 +137,12 @@ object RadioEngine : MusicDeck.Listener {
         if (engineRunning) return
         engineRunning = true
         mixThread = Thread(::mixLoop, "mixer").apply { start() }
+        if (_acceptCalls.value) calls.open(peerId())
     }
 
     fun shutdown() {
         stopLive()
+        calls.close()
         setMic(false)
         mic.stop()
         deck.stop()
@@ -160,13 +185,17 @@ object RadioEngine : MusicDeck.Listener {
         val micBuf = ShortArray(samples)
         val out = ShortArray(samples)
         val monitorBuf = ShortArray(samples)
+        val callerBuf = ShortArray(samples)
+        val callerFeed = ShortArray(frames)
         var track: AudioTrack? = null
         var next = System.nanoTime()
         var counter = 0
         try {
             while (engineRunning) {
                 // --- monitor (retorno no celular) dita o ritmo quando ligado
-                val wantMonitor = monitorEnabled
+                val callActive = calls.audioActive
+                // durante a ligação o retorno fica sempre ligado (para ouvir o ouvinte)
+                val wantMonitor = monitorEnabled || callActive
                 if (wantMonitor && track == null) {
                     track = createMonitorTrack()?.also { it.play() }
                 } else if (!wantMonitor && track != null) {
@@ -189,12 +218,23 @@ object RadioEngine : MusicDeck.Listener {
                     if (n < samples) micBuf.fill(0, n, samples)
                 }
 
+                // --- ouvinte (latência máxima ~150 ms)
+                mixer.callerOnAir = callActive && calls.state.value.onAir
+                if (callActive) {
+                    callerRing.trimTo(samples * 6)
+                    val n = callerRing.read(callerBuf, 0, samples)
+                    if (n < samples) callerBuf.fill(0, n, samples)
+                }
+
                 mixer.mix(
                     if (hasMusic) musicBuf else null,
                     if (micActive) micBuf else null,
                     out, frames,
-                    if (track != null) monitorBuf else null,
+                    monitorOut = if (track != null) monitorBuf else null,
+                    caller = if (callActive) callerBuf else null,
+                    callerFeed = if (callActive) callerFeed else null,
                 )
+                if (callActive) calls.feed(callerFeed, frames)
 
                 broadcaster?.submit(out.copyOf())
 
@@ -218,7 +258,7 @@ object RadioEngine : MusicDeck.Listener {
 
                 counter++
                 if (counter % 3 == 0) {
-                    _levels.value = Levels(mixer.musicPeak, mixer.micPeak, mixer.outPeakL, mixer.outPeakR, mixer.currentDuckGain)
+                    _levels.value = Levels(mixer.musicPeak, mixer.micPeak, mixer.callerPeak, mixer.outPeakL, mixer.outPeakR, mixer.currentDuckGain)
                 }
                 if (counter % 10 == 0 && hasMusic) {
                     val pos = deck.positionMs
@@ -240,6 +280,7 @@ object RadioEngine : MusicDeck.Listener {
         _mix.value = m
         mixer.musicVolume = m.musicVolume
         mixer.micVolume = m.micVolume
+        mixer.callerVolume = m.callerVolume
         mixer.duckLevel = m.duckLevel
         mixer.autoDuck = m.autoDuck
         mixer.duckAttackMs = m.duckAttackMs
@@ -265,11 +306,104 @@ object RadioEngine : MusicDeck.Listener {
             mixer.micOn = false
             _micOn.value = false
             // espera o fade-out do microfone antes de desligar a captura
-            main.postDelayed({ if (!mixer.micOn) mic.stop() }, 400)
+            main.postDelayed({ if (!mixer.micOn && !calls.audioActive) mic.stop() }, 400)
         }
     }
 
     fun toggleMic() = setMic(!_micOn.value)
+
+    // ------------------------------------------------------------------ ligações de ouvintes
+
+    private fun peerId() = "tvhuntter-dj-" + _callCode.value
+
+    /** Link que o ouvinte abre para ligar. */
+    fun callLink(): String {
+        val name = java.net.URLEncoder.encode(_config.value.stationName.ifBlank { "a rádio" }, "UTF-8").replace("+", "%20")
+        return "$CALL_PAGE?r=${_callCode.value}&n=$name"
+    }
+
+    fun setAcceptCalls(on: Boolean) {
+        _acceptCalls.value = on
+        prefs.acceptCalls = on
+        if (on) { startEngine(); calls.open(peerId()) } else calls.close()
+    }
+
+    fun regenerateCallLink() {
+        calls.close()
+        _callCode.value = prefs.newCallCode()
+        if (_acceptCalls.value) main.postDelayed({ calls.open(peerId()) }, 1800)
+    }
+
+    fun answerCall(id: String) {
+        startEngine()
+        cancelRingNotification()
+        calls.answer(id)
+    }
+
+    fun hangupCall(id: String) = calls.hangup(id)
+    fun hangupActiveCall() = calls.hangupActive()
+
+    fun setCallerOnAir(on: Boolean) {
+        if (on && !calls.state.value.connected) {
+            toast("Aguarde o áudio do ouvinte conectar")
+            return
+        }
+        calls.setOnAir(on)
+    }
+
+    override fun onRinging(caller: Caller) {
+        val text = if (caller.city.isNotBlank()) "${caller.name} (${caller.city})" else caller.name
+        toast("📞 Ouvinte chamando: $text")
+        val open = PendingIntent.getActivity(
+            app, 10, Intent(app, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val n = NotificationCompat.Builder(app, CALL_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_radio)
+            .setContentTitle("📞 Ouvinte chamando")
+            .setContentText(text)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .setTimeoutAfter(120_000)
+            .build()
+        runCatching { app.getSystemService(NotificationManager::class.java).notify(RING_NOTIF_ID, n) }
+    }
+
+    private fun cancelRingNotification() {
+        runCatching { app.getSystemService(NotificationManager::class.java).cancel(RING_NOTIF_ID) }
+    }
+
+    override fun onActiveChanged(active: Boolean) {
+        if (active) {
+            // abre a captura do microfone para a conversa reservada (sem ir ao ar)
+            if (!mic.start()) toast("Não foi possível abrir o microfone para falar com o ouvinte")
+        } else {
+            if (!mixer.micOn) main.postDelayed({ if (!mixer.micOn && !calls.audioActive) mic.stop() }, 400)
+        }
+    }
+
+    override fun onMessage(text: String) = toast(text)
+
+    private fun createCallChannel() {
+        val ch = NotificationChannel(CALL_CHANNEL, "Ligações de ouvintes", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Avisa quando um ouvinte liga para a rádio"
+            enableVibration(true)
+            setSound(
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
+                android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build(),
+            )
+        }
+        app.getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+    }
+
+    const val CALL_PAGE = "https://fabiohuntter2.github.io/Tvhuntternewsapp/"
+    private const val CALL_CHANNEL = "ouvintes"
+    private const val RING_NOTIF_ID = 77
 
     // ------------------------------------------------------------------ player
 

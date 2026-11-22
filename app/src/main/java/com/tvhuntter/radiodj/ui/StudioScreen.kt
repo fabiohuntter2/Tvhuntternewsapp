@@ -68,6 +68,7 @@ fun StudioScreen(onOpenServer: () -> Unit, onOpenPlaylist: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         LiveCard(onOpenServer)
+        CallPanel()
         PlayerCard(onOpenPlaylist)
         MicCard()
         VolumeCard()

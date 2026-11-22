@@ -64,6 +64,29 @@ class CoreTest {
     }
 
     @Test
+    fun callerOnAirDucksAndMixMinus() {
+        val mixer = DuckingMixer()
+        mixer.musicVolume = 1f
+        val music = sine(1152, amp = 0.5)
+        val caller = sine(1152, freq = 1000.0, amp = 0.5)
+        val mic = sine(1152, freq = 300.0, amp = 0.5)
+        val out = ShortArray(1152 * 2)
+        val feed = ShortArray(1152)
+        // fora do ar: ouvinte não sai no programa, e ele só ouve o locutor
+        repeat(10) { mixer.mix(music, mic, out, 1152, caller = caller, callerFeed = feed) }
+        assertEquals(1f, mixer.currentDuckGain)
+        val musicOnly = ShortArray(1152 * 2)
+        DuckingMixer().apply { musicVolume = 1f }.mix(music, null, musicOnly, 1152)
+        assertTrue(out.indices.all { kotlin.math.abs(out[it] - musicOnly[it]) <= 1 }, "programa deveria ter só música")
+        assertTrue(feed.indices.all { kotlin.math.abs(feed[it] - mic[it * 2]) <= 2 }, "retorno reservado deveria ser só o mic")
+        // no ar: música abaixa
+        mixer.callerOnAir = true
+        repeat(40) { mixer.mix(music, mic, out, 1152, caller = caller, callerFeed = feed) }
+        assertEquals(0.2f, mixer.currentDuckGain, 0.001f)
+        assertTrue(mixer.callerPeak > 0.4f)
+    }
+
+    @Test
     fun softClipNeverExceedsOne() {
         for (x in listOf(-5f, -1.2f, -0.5f, 0f, 0.9f, 1f, 3f)) {
             val y = DuckingMixer.softClip(x)

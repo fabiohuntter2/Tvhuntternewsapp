@@ -12,6 +12,7 @@ data class Track(val uri: String, val title: String)
 data class MixSettings(
     val musicVolume: Float = 0.8f,
     val micVolume: Float = 1.0f,
+    val callerVolume: Float = 1.0f,
     val duckLevel: Float = 0.2f,
     val autoDuck: Boolean = true,
     val duckAttackMs: Int = 400,
@@ -34,7 +35,7 @@ class Prefs(context: Context) {
         user = sp.getString("user", "aovivoapp")!!,
         password = sp.getString("password", "")!!,
         bitrateKbps = sp.getInt("bitrate", 128),
-        stationName = sp.getString("station", "TV Huntter")!!,
+        stationName = sp.getString("station", "TV Huntter News")!!,
         genre = sp.getString("genre", "Variedades")!!,
         url = sp.getString("url", "")!!,
     )
@@ -57,6 +58,7 @@ class Prefs(context: Context) {
     fun loadMix(): MixSettings = MixSettings(
         musicVolume = sp.getFloat("musicVol", 0.8f),
         micVolume = sp.getFloat("micVol", 1.0f),
+        callerVolume = sp.getFloat("callerVol", 1.0f),
         duckLevel = sp.getFloat("duck", 0.2f),
         autoDuck = sp.getBoolean("autoDuck", true),
         duckAttackMs = sp.getInt("attack", 400),
@@ -70,6 +72,7 @@ class Prefs(context: Context) {
         sp.edit()
             .putFloat("musicVol", m.musicVolume)
             .putFloat("micVol", m.micVolume)
+            .putFloat("callerVol", m.callerVolume)
             .putFloat("duck", m.duckLevel)
             .putBoolean("autoDuck", m.autoDuck)
             .putInt("attack", m.duckAttackMs)
@@ -79,6 +82,24 @@ class Prefs(context: Context) {
             .putBoolean("shuffle", m.shuffle)
             .apply()
     }
+
+    /** Código fixo da linha de ouvintes (forma o link). */
+    fun callCode(): String {
+        sp.getString("callCode", null)?.let { return it }
+        return newCallCode()
+    }
+
+    fun newCallCode(): String {
+        val chars = "abcdefghijkmnpqrstuvwxyz23456789"
+        val rnd = java.security.SecureRandom()
+        val code = (1..8).map { chars[rnd.nextInt(chars.length)] }.joinToString("")
+        sp.edit().putString("callCode", code).apply()
+        return code
+    }
+
+    var acceptCalls: Boolean
+        get() = sp.getBoolean("acceptCalls", true)
+        set(v) { sp.edit().putBoolean("acceptCalls", v).apply() }
 
     fun loadPlaylist(): List<Track> {
         val raw = sp.getString("playlist", null) ?: return emptyList()

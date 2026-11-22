@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Central de ouvintes</title>
+<script src="peerjs.min.js"></script>
+</head>
+<body>
+<script>
+/*
+ * Central de atendimento de ouvintes (roda escondida dentro do app).
+ * Ponte com o Kotlin: objeto "Android" (JavascriptInterface).
+ *
+ *  Kotlin -> JS: start(peerId, optsJson), stop(), answer(id), hangup(id), sendState(id, state), feed(b64)
+ *  JS -> Kotlin: Android.onLine(state, detail), Android.onIncoming(id, name, city),
+ *                Android.onCallState(id, state, detail), Android.onPcm(b64)
+ */
+var RATE = 44100;
+var peer = null, peerId = null, opts = {}, stopped = true, retryTimer = null;
+var calls = {};      // id -> MediaConnection
+var conns = {};      // id -> DataConnection
+var meta = {};       // id -> {name, city}
+var activeId = null;
+var ctx = null, outNode = null, outDest = null, inNodes = null, mutedEl = null;
+var outQueue = [], outQueued = 0, outReadPos = 0;
+
+function bridge(fn) {
+  try {
+    if (window.Android && Android[fn]) return Android[fn].apply(Android, Array.prototype.slice.call(arguments, 1));
+  } catch (e) {}
+}
+function line(state, detail) { bridge('onLine', state, detail || ''); }
+
+// ------------------------------------------------------------------ áudio
+function ensureAudio() {
+  if (ctx) { if (ctx.state !== 'running') ctx.resume(); return; }
+  ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RATE });
+  var silent = ctx.createGain(); silent.gain.value = 0; silent.connect(ctx.destination);
+  // saída: programa enviado pelo app -> ouvinte
+  outNode = ctx.createScriptProcessor(2048, 1, 1);
+  outNode.onaudioprocess = function (ev) {
+    var out = ev.outputBuffer.getChannelData(0);
+    // limita o atraso: no máximo ~250 ms na fila
+    while (outQueued - outReadPos > RATE / 4 && outQueue.length > 1) {
+      outQueued -= outQueue[0].length; outQueue.shift(); outReadPos = 0; outQueued += 0;
+    }
+    var i = 0;
+    while (i < out.length) {
+      if (!outQueue.length) { out[i++] = 0; continue; }
+      var chunk = outQueue[0];
+      out[i++] = chunk[outReadPos++];
+      if (outReadPos >= chunk.length) { outQueue.shift(); outQueued -= chunk.length; outReadPos = 0; }
+    }
+  };
+  outDest = ctx.createMediaStreamDestination();
+  outNode.connect(outDest);
+  outNode.connect(silent);
+  window._silent = silent;
+  ctx.resume();
+}
+
+function b64ToFloat(b64) {
+  var bin = atob(b64), n = bin.length >> 1, f = new Float32Array(n);
+  for (var i = 0; i < n; i++) {
+    var v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8);
+    if (v >= 32768) v -= 65536;
+    f[i] = v / 32768;
+  }
+  return f;
+}
+function floatToB64(f) {
+  var s = '';
+  for (var i = 0; i < f.length; i++) {
+    var v = Math.max(-1, Math.min(1, f[i]));
+    var x = v < 0 ? Math.round(v * 32768) : Math.round(v * 32767);
+    x &= 0xffff;
+    s += String.fromCharCode(x & 0xff, x >> 8);
+  }
+  return btoa(s);
+}
+
+// Kotlin envia o retorno (PCM 16 bits mono 44.1 kHz em base64)
+function feed(b64) {
+  if (!ctx || !activeId) return;
+  var f = b64ToFloat(b64);
+  outQueue.push(f); outQueued += f.length;
+}
+
+function attachIncoming(stream) {
+  detachIncoming();
+  ensureAudio();
+  // Chrome só entrega áudio remoto ao WebAudio se houver um elemento <audio> ligado
+  mutedEl = new Audio(); mutedEl.muted = true; mutedEl.srcObject = stream;
+  try { mutedEl.play(); } catch (e) {}
+  var src = ctx.createMediaStreamSource(stream);
+  var proc = ctx.createScriptProcessor(2048, 1, 1);
+  proc.onaudioprocess = function (ev) {
+    bridge('onPcm', floatToB64(ev.inputBuffer.getChannelData(0)));
+  };
+  src.connect(proc);
+  proc.connect(window._silent);
+  inNodes = { src: src, proc: proc };
+}
+function detachIncoming() {
+  if (inNodes) {
+    try { inNodes.src.disconnect(); inNodes.proc.disconnect(); } catch (e) {}
+    inNodes.proc.onaudioprocess = null;
+    inNodes = null;
+  }
+  if (mutedEl) { try { mutedEl.srcObject = null; } catch (e) {} mutedEl = null; }
+  outQueue = []; outQueued = 0; outReadPos = 0;
+}
+
+// ------------------------------------------------------------------ sinalização
+function start(id, optsJson) {
+  peerId = id;
+  try { opts = optsJson ? JSON.parse(optsJson) : {}; } catch (e) { opts = {}; }
+  stopped = false;
+  ensureAudio();
+  connectPeer();
+}
+
+function connectPeer() {
+  if (stopped) return;
+  clearTimeout(retryTimer);
+  if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
+  line('connecting');
+  var cfg = { debug: 1 };
+  if (opts.host) { cfg.host = opts.host; cfg.port = opts.port; cfg.path = opts.path || '/'; cfg.secure = !!opts.secure; }
+  var p = new Peer(peerId, cfg);
+  peer = p;
+  p.on('open', function () { if (peer === p) line('ready'); });
+  p.on('disconnected', function () {
+    if (peer !== p || stopped) return;
+    line('connecting', 'Reconectando…');
+    setTimeout(function () { if (peer === p && !p.destroyed) { try { p.reconnect(); } catch (e) { retry(5000); } } }, 2000);
+  });
+  p.on('error', function (err) {
+    if (peer !== p || stopped) return;
+    var t = err && err.type;
+    if (t === 'unavailable-id') { line('connecting', 'Liberando a linha…'); retry(8000); }
+    else if (t === 'peer-unavailable') { /* ouvinte sumiu: ignora */ }
+    else if (t === 'network' || t === 'server-error' || t === 'socket-error' || t === 'socket-closed') { line('error', 'Sem conexão com a central de chamadas'); retry(5000); }
+    else { line('error', (err && err.message) || String(t)); }
+  });
+  p.on('connection', function (conn) {
+    var id = conn.peer;
+    conns[id] = conn;
+    conn.on('open', function () {
+      if (conn.metadata) meta[id] = conn.metadata;
+      if (activeId === id) conn.send({ state: 'private' });
+      else if (calls[id]) conn.send({ state: activeId ? 'waiting' : 'ringing' });
+    });
+    conn.on('data', function (d) {
+      if (d && d.state === 'hangup' && calls[id]) {
+        var c = calls[id];
+        delete calls[id];
+        if (activeId === id) { activeId = null; detachIncoming(); }
+        try { c.close(); } catch (e) {}
+        bridge('onCallState', id, 'ended', 'O ouvinte desligou');
+      }
+    });
+    conn.on('close', function () { if (conns[id] === conn) delete conns[id]; });
+    conn.on('error', function () {});
+  });
+  p.on('call', function (call) {
+    var id = call.peer;
+    if (calls[id]) { try { calls[id].close(); } catch (e) {} }
+    calls[id] = call;
+    var m = call.metadata || meta[id] || {};
+    meta[id] = m;
+    call.on('close', function () { onCallClosed(id, call); });
+    call.on('error', function () { onCallClosed(id, call); });
+    bridge('onIncoming', id, String(m.name || 'Ouvinte').slice(0, 40), String(m.city || '').slice(0, 40));
+    sendState(id, activeId ? 'waiting' : 'ringing');
+  });
+}
+
+function retry(ms) {
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(connectPeer, ms);
+}
+
+function onCallClosed(id, call) {
+  if (calls[id] !== call) return;
+  delete calls[id];
+  if (activeId === id) { activeId = null; detachIncoming(); }
+  bridge('onCallState', id, 'ended', '');
+}
+
+function sendState(id, state) {
+  var c = conns[id];
+  if (c && c.open) { try { c.send({ state: state }); } catch (e) {} }
+}
+
+function answer(id) {
+  var call = calls[id];
+  if (!call) { bridge('onCallState', id, 'ended', 'Ligação não existe mais'); return; }
+  if (activeId && activeId !== id) hangup(activeId);
+  ensureAudio();
+  activeId = id;
+  outQueue = []; outQueued = 0; outReadPos = 0;
+  call.on('stream', function (stream) {
+    if (activeId === id) { attachIncoming(stream); bridge('onCallState', id, 'active', ''); }
+  });
+  try {
+    call.answer(outDest.stream);
+  } catch (e) {
+    activeId = null;
+    bridge('onCallState', id, 'ended', 'Falha ao atender');
+    return;
+  }
+  sendState(id, 'private');
+  // avisa os demais que estão em espera
+  for (var k in calls) if (k !== id) sendState(k, 'waiting');
+}
+
+function hangup(id) {
+  sendState(id, 'ended');
+  var call = calls[id];
+  var c = conns[id];
+  setTimeout(function () {
+    if (call) { try { call.close(); } catch (e) {} }
+    if (c) { try { c.close(); } catch (e) {} }
+  }, 300);
+  if (calls[id]) { delete calls[id]; }
+  if (activeId === id) { activeId = null; detachIncoming(); }
+  bridge('onCallState', id, 'ended', '');
+}
+
+function stop() {
+  stopped = true;
+  clearTimeout(retryTimer);
+  for (var id in calls) hangup(id);
+  if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
+  line('off');
+}
+</script>
+</body>
+</html>
