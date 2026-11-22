@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ligue para a rádio</title>
+<meta name="theme-color" content="#060c20">
+<script>
+  // Leva o ouvinte para a página de ligação, mantendo o código da rádio do link.
+  location.replace('docs/' + location.search + location.hash);
+</script>
+<style>body{background:#060c20;color:#eef2fb;font-family:system-ui,sans-serif;text-align:center;padding:40px 16px}a{color:#64b5f6}</style>
+</head>
+<body>
+<p>Abrindo a página de ligação…</p>
+<p><a id="go" href="docs/">Toque aqui se não abrir</a></p>
+<script>document.getElementById('go').href = 'docs/' + location.search;</script>
+</body>
+</html>
