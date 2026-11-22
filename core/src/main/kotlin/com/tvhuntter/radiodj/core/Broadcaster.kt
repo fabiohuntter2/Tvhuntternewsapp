@@ -22,7 +22,7 @@ data class LiveStatus(
 class Broadcaster(
     private val config: StreamConfig,
     private val onStatus: (LiveStatus) -> Unit,
-    private val clientFactory: (StreamConfig) -> StreamClient = { StreamClient.create(it) },
+    private val clientFactory: (StreamConfig, (String) -> Unit) -> StreamClient = { c, log -> StreamClient.create(c, log) },
     private val reconnectDelayMs: Long = 3000,
 ) {
     // ~5 s de áudio em blocos de 1152 quadros
@@ -81,7 +81,9 @@ class Broadcaster(
         var reconnects = 0
         var first = true
         while (running) {
-            val client = clientFactory(config)
+            val client = clientFactory(config) { line ->
+                publish(status.copy(message = line))
+            }
             try {
                 publish(status.copy(
                     state = if (first) LiveState.CONNECTING else LiveState.RECONNECTING,
@@ -96,7 +98,7 @@ class Broadcaster(
                 first = false
                 val since = System.currentTimeMillis()
                 var sent = status.bytesSent
-                publish(LiveStatus(LiveState.LIVE, "NO AR", sent, since, reconnects))
+                publish(LiveStatus(LiveState.LIVE, "NO AR • ${client.description}", sent, since, reconnects))
                 lastTitle?.let { sendTitleAsync(it) }
                 var lastReport = 0L
                 while (running) {
@@ -115,20 +117,14 @@ class Broadcaster(
             } catch (e: AuthException) {
                 connected = false
                 running = false
-                publish(LiveStatus(LiveState.ERROR, e.message ?: "Senha incorreta", status.bytesSent))
+                publish(LiveStatus(LiveState.ERROR, "Senha ou usuário recusados pelo servidor. Confira na aba Servidor.", status.bytesSent))
             } catch (e: InterruptedException) {
                 break
             } catch (e: Exception) {
                 connected = false
                 if (!running) break
                 reconnects++
-                val reason = when (e) {
-                    is java.net.UnknownHostException -> "Servidor não encontrado"
-                    is java.net.ConnectException -> "Conexão recusada (verifique servidor/porta)"
-                    is java.net.SocketTimeoutException -> "Tempo esgotado"
-                    is IOException -> e.message ?: "Falha de rede"
-                    else -> e.message ?: e.javaClass.simpleName
-                }
+                val reason = describeError(e).replaceFirstChar { it.uppercase() }
                 publish(status.copy(
                     state = LiveState.RECONNECTING,
                     message = "$reason - nova tentativa em ${reconnectDelayMs / 1000}s",

@@ -1,7 +1,7 @@
 package com.tvhuntter.radiodj.core
 
 enum class ServerType(val label: String) {
-    SHOUTCAST("SHOUTcast / Porta DJ"),
+    SHOUTCAST("Porta DJ / SHOUTcast"),
     ICECAST("Icecast / AzuraCast"),
 }
 

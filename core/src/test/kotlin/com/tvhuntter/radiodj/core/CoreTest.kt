@@ -199,8 +199,7 @@ class CoreTest {
     }
 
     @Test
-    fun shoutcastFallsBackToPortPlusOne() {
-        // procura uma porta livre p cuja p+1 também possa ser aberta
+    fun autoFallsBackToPortPlusOne() {
         var server: ServerSocket? = null
         var base = 0
         for (attempt in 0 until 50) {
@@ -216,9 +215,96 @@ class CoreTest {
                 Thread.sleep(300)
             }
         }
-        val c = ShoutcastClient(StreamConfig(ServerType.SHOUTCAST, "127.0.0.1", base, password = "p"))
+        val c = AutoStreamClient(StreamConfig(ServerType.SHOUTCAST, "127.0.0.1", base, password = "p"))
         c.connect()
         assertEquals(base + 1, c.connectedPort)
         c.close()
+    }
+
+    /** Servidor estilo Liquidsoap/harbor: só entende Icecast; ignora a linha de senha do SHOUTcast. */
+    @Test
+    fun autoDiscoversIcecastOnDjPort() {
+        handshakeTimeoutMs = 800
+        val server = ServerSocket(0)
+        val requests = mutableListOf<String>()
+        thread {
+            repeat(10) {
+                val s = try { server.accept() } catch (_: Exception) { return@thread }
+                thread {
+                    s.use {
+                        val inp = s.getInputStream()
+                        val sb = StringBuilder()
+                        try {
+                            while (!sb.endsWith("\r\n\r\n")) { val c = inp.read(); if (c < 0) break; sb.append(c.toChar()) }
+                        } catch (_: Exception) {}
+                        val req = sb.toString()
+                        synchronized(requests) { requests += req.lineSequence().first() }
+                        if (req.startsWith("SOURCE /live ") && req.contains("Authorization: Basic " +
+                                java.util.Base64.getEncoder().encodeToString("aovivo:segredo".toByteArray()))) {
+                            s.getOutputStream().write("HTTP/1.0 200 OK\r\n\r\n".toByteArray())
+                            Thread.sleep(300)
+                        } else if (req.startsWith("SOURCE")) {
+                            s.getOutputStream().write("HTTP/1.0 401 Unauthorized\r\n\r\n".toByteArray())
+                        }
+                    }
+                }
+            }
+        }
+        val log = mutableListOf<String>()
+        val c = AutoStreamClient(StreamConfig(ServerType.SHOUTCAST, "127.0.0.1", server.localPort, user = "aovivo", password = "segredo")) { log += it }
+        c.connect()
+        log.forEach(::println)
+        assertTrue(c.description.contains("/live"), c.description)
+        c.close()
+        server.close()
+        handshakeTimeoutMs = 6000
+    }
+
+    /** Painel que quer só a senha (sem "usuário:"). */
+    @Test
+    fun autoTriesPlainPassword() {
+        handshakeTimeoutMs = 800
+        val server = ServerSocket(0)
+        thread {
+            repeat(6) {
+                val s = try { server.accept() } catch (_: Exception) { return@thread }
+                s.use {
+                    val inp = s.getInputStream()
+                    val line = generateSequence { inp.read().takeIf { it != '\n'.code && it != -1 } }
+                        .map { it.toChar() }.joinToString("").trim()
+                    if (line == "segredo") { s.getOutputStream().write("OK2\r\n\r\n".toByteArray()); Thread.sleep(300) }
+                    else if (!line.startsWith("SOURCE")) s.getOutputStream().write("invalid password\r\n".toByteArray())
+                }
+            }
+        }
+        val c = AutoStreamClient(StreamConfig(ServerType.SHOUTCAST, "127.0.0.1", server.localPort, user = "dj", password = "segredo"))
+        c.connect()
+        assertTrue(c.description.startsWith("SHOUTcast"))
+        c.close(); server.close()
+        handshakeTimeoutMs = 6000
+    }
+
+    @Test
+    fun wrongPasswordEverywhereIsAuthError() {
+        handshakeTimeoutMs = 800
+        val server = ServerSocket(0)
+        thread {
+            repeat(30) {
+                val s = try { server.accept() } catch (_: Exception) { return@thread }
+                s.use {
+                    val inp = s.getInputStream()
+                    val first = generateSequence { inp.read().takeIf { it != '\n'.code && it != -1 } }
+                        .map { it.toChar() }.joinToString("")
+                    if (first.startsWith("SOURCE")) s.getOutputStream().write("HTTP/1.0 401 Unauthorized\r\n\r\n".toByteArray())
+                    else s.getOutputStream().write("invalid password\r\n".toByteArray())
+                }
+            }
+        }
+        val (ok, lines) = AutoStreamClient.test(StreamConfig(ServerType.SHOUTCAST, "127.0.0.1", server.localPort, password = "x"))
+        lines.forEach(::println)
+        assertTrue(!ok)
+        assertTrue(lines.last().contains("senha recusada"))
+        server.close()
+        handshakeTimeoutMs = 6000
     }
 }
